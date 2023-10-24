@@ -76,63 +76,78 @@ def save_database(db, base, prefix):
         f.write("\n".join(db.modes))
 
 
-def split_dataset(graph, frame, taxonomy):
-    
-    nodes = list(graph.nodes)
-    random.shuffle(nodes)
-    N = len(nodes)
-    index = int(0.8*N)
-    train_nodes, test_nodes = nodes[0:index], nodes[index:]
-    
-    train_frame = frame[frame.term.isin(train_nodes)]
-    test_frame = frame[frame.term.isin(test_nodes)]
+def create_database(pos, neg, facts):
+    db = Database()
+    db.pos = list(pos) 
+    db.neg = list(neg)
+    db.facts = list(facts)
+    return db
 
-    train_taxonomy = taxonomy[taxonomy.geneID.isin(train_frame.geneID.unique())]
-    test_taxonomy = taxonomy[taxonomy.geneID.isin(test_frame.geneID.unique())]
+def train_test_split(db, test_size=0.2):
+    pos = list(db.pos)
+    neg = list(db.neg)
 
-    train_graph = networkx.subgraph(graph, train_nodes)
-    test_graph = networkx.subgraph(graph, test_nodes)
-    
-    return (train_graph, train_frame, train_taxonomy), (test_graph, test_frame, test_taxonomy)
+    random.shuffle(pos)
+    random.shuffle(neg)
 
-def get_k_folds(graph, frame, taxonomy, k=5):
-    nodes = list(graph.nodes)
-    random.shuffle(nodes)
-    N = len(nodes)
-    for i in range(0, N, N//k):
-        test_nodes = nodes[i:i+N//k]
-        train_nodes = nodes[0:i] + nodes[i+N//k:]
+    i = int(len(pos)*test_size)
+    test_pos = pos[0:i]
+    train_pos = pos[i:]
 
-        train_frame = frame[frame.term.isin(train_nodes)]
-        test_frame = frame[frame.term.isin(test_nodes)]
+    i = int(len(neg)*test_size)
+    test_neg = neg[0:i]
+    train_neg = neg[i:]
 
-        train_taxonomy = taxonomy[taxonomy.geneID.isin(train_frame.geneID.unique())]
-        test_taxonomy = taxonomy[taxonomy.geneID.isin(test_frame.geneID.unique())]
+    train = create_database(train_pos, train_neg, db.facts)
+    test = create_database(test_pos, test_neg, db.facts)
 
-        train_graph = networkx.subgraph(graph, train_nodes)
-        test_graph = networkx.subgraph(graph, test_nodes)
-        
-        yield (train_graph, train_frame, train_taxonomy), (test_graph, test_frame, test_taxonomy)
-         
+    return train, test 
+
+def kfold_split(db, k = 5):
+    pos = list(db.pos)
+    neg = list(db.neg)
+
+    N_pos, N_neg = len(pos), len(neg)
+    for i, j in zip(range(0, N_pos, N_pos//k), range(0, N_neg, N_neg//k)):
+        test_pos = pos[i:i+N_pos//k]
+        train_pos = pos[0:i] + pos[i+N_pos//k:]
+
+        test_neg = neg[j:j+N_neg//k]
+        train_neg = neg[0:j] + neg[j+N_neg//k:]
+
+        train = create_database(train_pos, train_neg, db.facts)
+        test = create_database(test_pos, test_neg, db.facts)
+        yield (train, test)
 
 
-if __name__ == "__main__":
-    random.seed(0)
-    graph = obonet.read_obo("go-basic.obo")
-    frame = pd.read_csv("terms.tsv", sep="\t")
-    taxonomy = pd.read_csv("taxonomy.tsv", sep="\t")
 
-    train_split, test_split = split_dataset(graph, frame, taxonomy)
-    train, test = build_dataset(*train_split), build_dataset(*test_split)
-    ts = str(int(time.time()))[-1]
-    train_base = path.join(f"go_{ts}", "train")
-    test_base = path.join(f"go_{ts}", "test")
+import os, pathlib
 
-    makedirs(train_base, exist_ok=True)
-    makedirs(test_base, exist_ok=True)
+random.seed(0)
+graph = obonet.read_obo("go-basic.obo")
+frame = pd.read_csv("terms.tsv", sep="\t")
+taxonomy = pd.read_csv("taxonomy.tsv", sep="\t")
 
-    save_database(train, train_base, "train")
-    save_database(test, test_base, "test")
-    
+target = 'is_a'
+db = build_dataset(graph, frame, taxonomy, target=target)
+
+os.makedirs(target, exist_ok=True)
+train, test = train_test_split(db, test_size=0.2)
+for i, (train_, test_) in enumerate(kfold_split(db)):
+    fold_path = path.join(target, f"fold{i}")
+    os.makedirs(fold_path, exist_ok=True)
+
+    train_path = pathlib.Path(path.join(fold_path, "train"))
+    test_path = pathlib.Path(path.join(fold_path, "test"))
+
+    os.makedirs(train_path, exist_ok=True)
+    os.makedirs(test_path, exist_ok=True)
+
+    train_.write(filename=f"train", location = train_path)
+    test_.write(filename=f"test", location = test_path)
+
+test_path = pathlib.Path(path.join(target, "test"))
+os.makedirs(test_path, exist_ok=True)
+test.write(filename=f"test", location = test_path)
 
 

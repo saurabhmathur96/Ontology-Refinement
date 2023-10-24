@@ -1,10 +1,9 @@
 from sklearn.metrics import roc_auc_score
 from srlearn.rdn import BoostedRDNClassifier
-from srlearn import Background
+from srlearn import Background, Database
 import numpy as np 
 import pandas as pd
 import random, obonet
-from dataset import split_dataset, build_dataset, get_k_folds
 
 modes = [
     "part_of(-T, +T).",
@@ -37,6 +36,8 @@ modes = [
     "taxonomy(+G, +O).",
 ]
 
+from os import path
+import os
 
 random.seed(0)
 
@@ -44,42 +45,28 @@ from srlearn.system_manager import FileSystem
 from os import getcwd
 
 FileSystem.boostsrl_data_directory = getcwd()
-
-systems = []
-graph = obonet.read_obo("go-basic.obo")
-frame = pd.read_csv("terms.tsv", sep="\t")
-taxonomy = pd.read_csv("taxonomy.tsv", sep="\t")
-
-
-train_split, test_split = split_dataset(graph, frame, taxonomy)
-# train, test = build_dataset(*train_split, target='is_a'), build_dataset(*test_split, target='is_a')
-
 bk = Background(modes=modes)
-
-
 max_trees = 2
 scores = []
-for fold_train, fold_valid in get_k_folds(*train_split):
-    systems.append(FileSystem())
+k = 5
+target = "is_a"
+
+base = path.join(target, "models")
+os.makedirs(base, exist_ok=True)
+
+for i in range(k):
+    train_path = path.join(target, f"fold{i}", "train")
+    train = Database.from_files(path.join(train_path, "train_pos.txt"),  path.join(train_path, "train_neg.txt"),  
+                            path.join(train_path, "train_facts.txt"), lazy_load=False)
+    test_path = path.join(target, f"fold{i}", "test")
+    test = Database.from_files(path.join(test_path, "test_pos.txt"),  path.join(test_path, "test_neg.txt"),  
+                            path.join(test_path, "test_facts.txt"), lazy_load=False)
     clf = BoostedRDNClassifier(
         background=bk,
-        target="is_a",
-        max_tree_depth=2,
-        node_size=2,
+        target=target,
+        max_tree_depth=1,
+        node_size=1,
         n_estimators=max_trees,
     )
-    train = build_dataset(*fold_train, target='is_a')
-    valid = build_dataset(*fold_valid, target='is_a')
     clf.fit(train)
-
-    fold_scores = []
-    for n_trees in range(1, max_trees+1):
-        clf.n_estimators = n_trees
-        probs = clf.predict_proba(valid)
-        auc_roc = roc_auc_score(clf.classes_, probs)
-        fold_scores.append(auc_roc)
-    scores.append(np.array(fold_scores))
-scores = np.array(scores)
-mean,std = np.mean(scores, axis=0),np.std(scores, axis=0) 
-for n_trees in range(1, max_trees+1):
-    print (f"{n_trees:2} {mean[n_trees-1]:.4f} ± {std[n_trees-1]:.4f}")
+    clf.to_json(path.join(base, f"fold{i}.json"))
